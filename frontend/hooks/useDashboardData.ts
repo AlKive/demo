@@ -76,10 +76,15 @@ export const useDashboardData = (isMissionActive: boolean) => {
     const fetchStats = async () => {
       try {
         const response = await fetch('/api/missions/stats');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
         const data = await response.json();
         setStats(data);
       } catch (error) {
         console.error("Failed to fetch dashboard stats:", error);
+        // Set default stats to prevent UI crash
+        setStats({ totalFlights: 0, totalFlightTime: '0 Hours' });
       }
     };
     fetchStats();

@@ -96,8 +96,12 @@ fastify.get('/', async (request, reply) => {
 // GET all missions (for Flight Logs)
 fastify.get('/api/missions', async (request, reply) => {
   try {
-    const { rows } = await db.query('SELECT * FROM mission_logs ORDER BY id DESC');
-    return rows;
+    const result = await db.query('SELECT * FROM mission_logs ORDER BY id DESC');
+    if (!result || !result.rows) {
+      fastify.log.error('Invalid database response');
+      return reply.code(500).send({ error: 'Database error: invalid response' });
+    }
+    return result.rows || [];
   } catch (err) {
     fastify.log.error(err);
     reply.code(500).send({ error: 'Database error' });
@@ -109,11 +113,19 @@ fastify.get('/api/missions/stats', async (request, reply) => {
   try {
     const countResult = await db.query('SELECT COUNT(*) AS total_flights FROM mission_logs');
     const durationResult = await db.query('SELECT duration FROM mission_logs');
+    
+    if (!countResult || !countResult.rows || countResult.rows.length === 0) {
+      fastify.log.error('Invalid count result from database');
+      return reply.code(500).send({ error: 'Database error: invalid response' });
+    }
+    
     let totalSeconds = 0;
-    for (const row of durationResult.rows) {
-      const seconds = parseInt(row.duration, 10);
-      if (!isNaN(seconds)) {
-        totalSeconds += seconds;
+    if (durationResult && durationResult.rows) {
+      for (const row of durationResult.rows) {
+        const seconds = parseInt(row.duration, 10);
+        if (!isNaN(seconds)) {
+          totalSeconds += seconds;
+        }
       }
     }
     const hours = totalSeconds / 3600; 
@@ -132,12 +144,23 @@ fastify.post('/api/missions', async (request, reply) => {
   try {
     const mission = request.body as { duration: number } & Omit<Mission, 'id' | 'duration'>;
     const { name, date, duration, status, location, gpsTrack, detectedSites } = mission;
+    
+    if (!name || !date || !status || !location) {
+      return reply.code(400).send({ error: 'Missing required mission fields' });
+    }
+    
     const durationString = String(duration); 
-    const { rows } = await db.query(
+    const result = await db.query(
       'INSERT INTO mission_logs (name, date, duration, status, location, gps_track, detected_sites) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [name, date, durationString, status, location, JSON.stringify(gpsTrack), JSON.stringify(detectedSites)]
+      [name, date, durationString, status, location, JSON.stringify(gpsTrack || []), JSON.stringify(detectedSites || [])]
     );
-    return rows[0];
+    
+    if (!result || !result.rows || result.rows.length === 0) {
+      fastify.log.error('Invalid insert result from database');
+      return reply.code(500).send({ error: 'Database error: failed to save mission' });
+    }
+    
+    return result.rows[0];
   } catch (err) {
     fastify.log.error(err);
     reply.code(500).send({ error: 'Database error' });
@@ -160,11 +183,17 @@ fastify.post('/api/plans', async (request, reply) => {
       return reply.code(400).send({ error: 'Invalid plan data. Name and waypoints are required.' });
     }
 
-    const { rows } = await db.query(
+    const result = await db.query(
       'INSERT INTO mission_plans (name, altitude, speed, waypoints) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, altitude, speed, JSON.stringify(waypoints)]
     );
-    return rows[0]; 
+    
+    if (!result || !result.rows || result.rows.length === 0) {
+      fastify.log.error('Invalid insert result for mission plan');
+      return reply.code(500).send({ error: 'Database error: failed to save plan' });
+    }
+    
+    return result.rows[0]; 
   } catch (err) {
     fastify.log.error(err);
     reply.code(500).send({ error: 'Database error while saving plan' });
@@ -175,8 +204,12 @@ fastify.post('/api/plans', async (request, reply) => {
 fastify.get('/api/plans', async (request, reply) => {
   try {
     // Only fetch id and name for the list view
-    const { rows } = await db.query('SELECT id, name FROM mission_plans ORDER BY id DESC');
-    return rows;
+    const result = await db.query('SELECT id, name FROM mission_plans ORDER BY id DESC');
+    if (!result || !result.rows) {
+      fastify.log.error('Invalid database response for plans');
+      return reply.code(500).send({ error: 'Database error: invalid response' });
+    }
+    return result.rows || [];
   } catch (err) {
     fastify.log.error(err);
     reply.code(500).send({ error: 'Database error while fetching plans' });
@@ -188,17 +221,22 @@ fastify.get('/api/plans/:id', async (request, reply) => {
   try {
     const { id } = request.params as { id: string };
     
-    const { rows } = await db.query(
+    const result = await db.query(
       'SELECT * FROM mission_plans WHERE id = $1',
       [parseInt(id, 10)]
     );
+    
+    if (!result || !result.rows) {
+      fastify.log.error('Invalid database response for plan');
+      return reply.code(500).send({ error: 'Database error: invalid response' });
+    }
 
-    if (rows.length === 0) {
+    if (result.rows.length === 0) {
       return reply.code(404).send({ error: 'Plan not found' });
     }
     
     // Return the full plan details
-    return rows[0]; 
+    return result.rows[0]; 
   } catch (err) {
     fastify.log.error(err);
     reply.code(500).send({ error: 'Database error while fetching plan' });
@@ -209,7 +247,7 @@ fastify.get('/api/plans/:id', async (request, reply) => {
 // --- Start Server ---
 const start = async () => {
   try {
-    await fastify.listen({ port: 8080, host: '0.0.0.0' });
+    await fastify.listen({ port: 8080, host: '127.0.0.1' });
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
